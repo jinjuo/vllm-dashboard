@@ -34,30 +34,22 @@
   #refresh-btn:active { transform: scale(0.96); }
   #refresh-btn.spinning svg { animation: spin 0.6s linear; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .gpu-grid { display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 20px; }
-  .gpu-card { background: var(--grad-card); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 14px; position: relative; }
-  .gpu-card:hover { border-color: var(--border-light); }
-  .gpu-card::before { content: ''; position: absolute; top: 0; left: 0; width: 3px; height: 100%; border-radius: 8px 0 0 8px; background: var(--ok); }
-  .gpu-card.warn::before { background: var(--warn); }
-  .gpu-card.err::before  { background: var(--err); }
-  .gpu-card .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
-  .gpu-card .card-head h3 { flex-shrink: 0; font-size: 0.8rem; color: var(--blue); }
-  .sparkline-wrap { flex: 0 0 auto; width: 100px; height: 20px; }
-  .sparkline-wrap canvas { width: 100%; height: 20px; display: block; }
-  .collapse-btn { background: transparent; border: 1px solid var(--card-border); color: var(--text-dim);
-                   border-radius: 3px; cursor: pointer; font-size: 0.6rem; line-height: 1;
-                   padding: 2px 5px; transition: all 0.2s; flex-shrink: 0; }
-  .collapse-btn:hover { background: var(--card-elevated); color: var(--text); }
-  .gpu-card .card-body { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 14px;
-                          overflow: hidden; transition: max-height 0.3s, opacity 0.25s; }
-  .gpu-card.collapsed .card-body { max-height: 0 !important; opacity: 0; padding: 0; overflow: hidden; }
-  .gb-row { display: inline-flex; align-items: center; gap: 3px; font-size: 0.72rem; white-space: nowrap; }
-  .gb-row .lbl { color: var(--text-dim); }
-  .gb-row .val { font-weight: 600; }
-  .gb-bar { display: inline-block; width: 60px; height: 4px; background: #1a2332; border-radius: 2px; overflow: hidden; vertical-align: middle; }
-  .gb-bar .fill { height: 100%; border-radius: 2px; transition: width 0.4s; background: var(--ok); }
-  .gb-bar .fill.warn { background: var(--warn); }
-  .gb-bar .fill.err  { background: var(--err); }
+  .gpu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-bottom: 0; }
+  .gpu-card { padding: 10px; background: var(--bg-alt); border-radius: 6px; }
+  .gpu-card .card-title { font-size: 0.7rem; color: var(--text-dim); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .gpu-card .big-num { font-size: 1.6rem; font-weight: 700; }
+  .gpu-card .big-num.ok { color: var(--ok); }
+  .gpu-card .big-num.warn { color: var(--warn); }
+  .gpu-card .big-num.err { color: var(--err); }
+  .gpu-card .sub-row { font-size: 0.7rem; color: var(--text-muted); margin-top: 4px; }
+  .gpu-card .detail-row { display: flex; justify-content: space-between; font-size: 0.7rem; padding: 2px 0; }
+  .gpu-card .detail-row .lbl { color: var(--text-dim); }
+  .gpu-card .detail-row .val { font-weight: 600; }
+  .gpu-bar-wrap { height: 5px; background: #1a2332; border-radius: 3px; margin-top: 6px; overflow: hidden; }
+  .gpu-bar-wrap .fill { height: 100%; border-radius: 3px; transition: width 0.4s; background: var(--ok); }
+  .gpu-bar-wrap .fill.warn { background: var(--warn); }
+  .gpu-bar-wrap .fill.err { background: var(--err); }
+
   .vllm-panel { background: var(--grad-card); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px; margin-bottom: 20px; }
   .vllm-panel h2 { font-size: 0.9rem; color: var(--blue); margin-bottom: 10px; }
   .vllm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
@@ -110,6 +102,25 @@
   .token-card .num { font-size: 1.3rem; font-weight: 700; color: var(--cyan); }
   .token-card .label { font-size: 0.7rem; color: var(--text-dim); }
   .token-card .sub { font-size: 0.6rem; color: var(--text-muted); margin-top: 1px; }
+
+  /* ═══ CPU/内存面板 ═══ */
+  .cpu-panel { background: var(--grad-card); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+  .cpu-panel h2 { font-size: 0.85rem; color: var(--cyan); margin-bottom: 10px; }
+  .cpu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+  .cpu-card { padding: 10px; background: var(--bg-alt); border-radius: 6px; }
+  .cpu-card .card-title { font-size: 0.7rem; color: var(--text-dim); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .cpu-card .big-num { font-size: 1.6rem; font-weight: 700; }
+  .cpu-card .big-num.ok { color: var(--ok); }
+  .cpu-card .big-num.warn { color: var(--warn); }
+  .cpu-card .big-num.err { color: var(--err); }
+  .cpu-card .sub-row { font-size: 0.7rem; color: var(--text-muted); margin-top: 4px; }
+  .cpu-card .detail-row { display: flex; justify-content: space-between; font-size: 0.7rem; padding: 2px 0; }
+  .cpu-card .detail-row .lbl { color: var(--text-dim); }
+  .cpu-card .detail-row .val { font-weight: 600; }
+  .cpu-bar-wrap { height: 5px; background: #1a2332; border-radius: 3px; margin-top: 6px; overflow: hidden; }
+  .cpu-bar-wrap .fill { height: 100%; border-radius: 3px; transition: width 0.4s; background: var(--ok); }
+  .cpu-bar-wrap .fill.warn { background: var(--warn); }
+  .cpu-bar-wrap .fill.err { background: var(--err); }
 
   /* ═══ 机箱传感器面板 ═══ */
   .chassis-panel { background: var(--grad-card); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
@@ -175,6 +186,11 @@
     <div class="token-card"><div class="num" id="tok-total-gen">--</div><div class="label">累计输出</div><div class="sub">generation</div></div>
     <div class="token-card"><div class="num" id="tok-total-prom">--</div><div class="label">累计输入</div><div class="sub">prompt</div></div>
   </div>
+</div>
+
+<div class="cpu-panel" id="cpu-panel">
+  <h2>🖥️ CPU · 内存 · GPU</h2>
+  <div class="cpu-grid" id="cpu-grid"></div>
 </div>
 
 <div class="chassis-panel" id="chassis-panel">
@@ -406,10 +422,11 @@ C.gpu.options.scales.y2 = {position:'right', grid:{display:false},offset:true,  
 function renderGpu(cards) {
   gridEl.innerHTML = '';
   const nowLabel = _now();
+  const cpuGrid = document.getElementById('cpu-grid');
+
   for (const c of cards) {
     const mp = c.mem_total_mb?(c.mem_used_mb/c.mem_total_mb*100):0;
     const pp = c.power_limit_w?(c.power_w/c.power_limit_w*100):0;
-    const cl = mp>92?'err':mp>75?'warn':'';
     const idx = c.index;
 
     // 按 GPU index 缓存 sparkline 数据
@@ -421,21 +438,22 @@ function renderGpu(cards) {
     if (gpuHist[idx].mem.length > 30) gpuHist[idx].mem.shift();
     if (gpuHist[idx].temp.length > 30) gpuHist[idx].temp.shift();
 
-    const collapsed = localStorage.getItem('gpu-collapsed-'+idx) === '1';
+    const memCl = mp>92?'err':mp>75?'warn':'';
+    const tempCl = c.temp_c>85?'err':c.temp_c>70?'warn':'ok';
+    const utilCl = c.util_pct>80?'err':c.util_pct>50?'warn':'ok';
 
-    gridEl.innerHTML += `<div class="gpu-card ${cl}${collapsed?' collapsed':''}" data-idx="${idx}">
-      <div class="card-head">
-        <h3>GPU ${idx} · ${c.name}</h3>
-        <span class="sparkline-wrap"><canvas class="sparkline" data-idx="${idx}"></canvas></span>
-        <button class="collapse-btn" data-idx="${idx}" onclick="toggleGpuCard(${idx})">${collapsed?'+':'−'}</button>
-      </div>
-      <div class="card-body">
-        <span class="gb-row"><span class="lbl">显存</span><span class="val">${_mb(c.mem_used_mb)} / ${_mb(c.mem_total_mb)}</span><span class="gb-bar"><span class="fill ${cl}" style="width:${mp}%"></span></span></span>
-        <span class="gb-row"><span class="lbl">温度</span><span class="val">${c.temp_c}°C</span></span>
-        <span class="gb-row"><span class="lbl">利用率</span><span class="val">${c.util_pct}%</span></span>
-        <span class="gb-row"><span class="lbl">功耗</span><span class="val">${c.power_w.toFixed(1)}W / ${c.power_limit_w.toFixed(0)}W</span><span class="gb-bar"><span class="fill ${pp>90?'err':pp>70?'warn':''}" style="width:${pp}%"></span></span></span>
-      </div>
-    </div>`;
+    if (cpuGrid) {
+      cpuGrid.innerHTML += `<div class="cpu-card gpu-card" data-idx="${idx}">
+        <div class="card-title">GPU ${idx} · ${c.name}</div>
+        <div class="big-num ${memCl}">${mp.toFixed(0)}%</div>
+        <div class="sub-row">显存 ${_mb(c.mem_used_mb)} / ${_mb(c.mem_total_mb)}</div>
+        <div class="detail-row"><span class="lbl">温度</span><span class="val" style="color:var(--${tempCl||'ok'})">${c.temp_c}°C</span></div>
+        <div class="detail-row"><span class="lbl">利用率</span><span class="val" style="color:var(--${utilCl||'ok'})">${c.util_pct}%</span></div>
+        <div class="detail-row"><span class="lbl">功耗</span><span class="val">${c.power_w.toFixed(0)}W / ${c.power_limit_w.toFixed(0)}W</span></div>
+        <div class="cpu-bar-wrap"><div class="fill ${memCl}" style="width:${mp}%"></div></div>
+      </div>`;
+    }
+
     // GPU 实时追加到缓冲区（保持原有主图兼容）
     tsG.push(nowLabel);
     dMem.push(c.mem_used_mb); dTemp.push(c.temp_c); dUtil.push(c.util_pct); dPower.push(c.power_w);
@@ -596,19 +614,51 @@ function renderChassis(data) {
   grid.innerHTML = html;
 }
 
+/* ═══ CPU/内存渲染 ═══ */
+function renderCpu(data) {
+  const grid = document.getElementById('cpu-grid');
+  if (!grid || data.error) return;
+
+  const cpuCl = data.cpu_pct > 80 ? 'err' : data.cpu_pct > 50 ? 'warn' : 'ok';
+  const memCl = data.mem_pct > 80 ? 'err' : data.mem_pct > 50 ? 'warn' : 'ok';
+
+  grid.innerHTML = `
+    <div class="cpu-card">
+      <div class="card-title">CPU 使用率</div>
+      <div class="big-num ${cpuCl}">${data.cpu_pct}%</div>
+      <div class="sub-row">${data.cores || '--'} 核心 · 负载 ${ (data.load_avg||[0,0,0]).map(v=>v.toFixed(1)).join(' / ')}</div>
+      <div class="cpu-bar-wrap"><div class="fill ${cpuCl}" style="width:${data.cpu_pct}%"></div></div>
+    </div>
+    <div class="cpu-card">
+      <div class="card-title">内存使用</div>
+      <div class="big-num ${memCl}">${data.mem_used_mb.toFixed(0)} / ${data.mem_total_mb.toFixed(0)} GB</div>
+      <div class="detail-row"><span class="lbl">使用率</span><span class="val">${data.mem_pct}%</span></div>
+      <div class="detail-row"><span class="lbl">可用</span><span class="val">${data.mem_avail_mb.toFixed(0)} GB</span></div>
+      <div class="cpu-bar-wrap"><div class="fill ${memCl}" style="width:${data.mem_pct}%"></div></div>
+    </div>
+    <div class="cpu-card">
+      <div class="card-title">交换空间</div>
+      <div class="big-num ${data.swap_pct > 50 ? 'err' : data.swap_pct > 0 ? 'warn' : 'ok'}">${data.swap_used_mb.toFixed(0)} / ${data.swap_total_mb.toFixed(0)} MB</div>
+      <div class="sub-row">使用率 ${data.swap_pct}%</div>
+    </div>
+  `;
+}
+
 /* ═══ 轮询 ═══ */
 async function fetchAll() {
   try {
-    const [gr,vr,tr,cr] = await Promise.all([
+    const [gr,vr,tr,cr,cpur] = await Promise.all([
       fetch('/api/gpu'), fetch('/api/vllm'),
-      fetch('/api/tokens'), fetch('/api/chassis')
+      fetch('/api/tokens'), fetch('/api/chassis'), fetch('/api/cpu')
     ]);
     let degraded = false;
     if(!gr.ok) { degraded = true; throw new Error('GPU API '+gr.status); }
-    renderGpu((await gr.json()).cards);
+    const gpuData = (await gr.json()).cards;
     if(!vr.ok) { degraded = true; }
     else { renderVllm(await vr.json()); }
     if(tr.ok) renderTokens(await tr.json());
+    if(cpur.ok) renderCpu(await cpur.json());
+    renderGpu(gpuData);
     if(cr.ok) renderChassis(await cr.json());
     statusEl.innerHTML = (degraded ? '🟡' : '🟢') + ' 正常 · '+_now();
   } catch(e) {

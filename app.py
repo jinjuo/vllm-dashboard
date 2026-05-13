@@ -166,44 +166,74 @@ async def gpu_status():
 
 # ── vLLM 端点 ──────────────────────────────────────────────────
 
+# 存储上一次 Prometheus 计数器值用于计算 throughput rate
+_vllm_prom_last = {}  # {metric_name: (value, timestamp)}
+
+def _parse_prom_float(text, name):
+    """从 Prometheus 纯文本中提取 gauge/counter 值。"""
+    for line in text.split("\n"):
+        if line.startswith(name + "{"):
+            try:
+                return float(line.rsplit(" ", 1)[-1])
+            except:
+                pass
+    return None
+
 @app.get("/api/vllm")
 async def vllm_status():
-    """从 vLLM journalctl 日志解析最新一行的性能指标。"""
-    cmd = f"journalctl -u {config.VLLM_UNIT} --no-pager -n 50"
-    raw = _run_ssh(cmd)
+    """从 vLLM Prometheus metrics（localhost:30001/metrics）获取性能指标。"""
+    import httpx
+    import time
 
-    # 解析 vLLM loggers.py 输出
-    # "Avg prompt throughput: 611.9 tokens/s, Avg generation throughput: 21.0 tokens/s,
-    #  Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 16.4%, Prefix cache hit rate: 89.3%"
-    pat_gen  = re.compile(r"Avg generation throughput:\s*([\d.]+)\s*tokens/s")
-    pat_prom = re.compile(r"Avg prompt throughput:\s*([\d.]+)\s*tokens/s")
-    pat_run  = re.compile(r"Running:\s*(\d+)\s*reqs")
-    pat_wait = re.compile(r"Waiting:\s*(\d+)\s*reqs")
-    pat_kv   = re.compile(r"GPU KV cache usage:\s*([\d.]+)%")
-    pat_pfx  = re.compile(r"Prefix cache hit rate:\s*([\d.]+)%")
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get("http://localhost:30001/metrics", timeout=10.0)
+            r.raise_for_status()
+            text = r.text
+    except Exception as e:
+        return {"latest": {}, "avg_gen_tps": 0, "history": [], "error": str(e)}
 
-    # 取最近 10 条有效日志
-    lines = [l for l in raw.split("\n") if pat_gen.search(l)]
-    history = []
-    for line in lines[-10:]:
-        history.append({
-            "gen_tps": _to_float(pat_gen.search(line)),
-            "prom_tps": _to_float(pat_prom.search(line)),
-            "running": _to_int(pat_run.search(line)),
-            "waiting": _to_int(pat_wait.search(line)),
-            "kv_pct": _to_float(pat_kv.search(line)),
-            "pfx_hit": _to_float(pat_pfx.search(line)),
-        })
+    # 解析 Prometheus 指标
+    gen_tok  = _parse_prom_float(text, "vllm:generation_tokens_total") or 0
+    prom_tok = _parse_prom_float(text, "vllm:prompt_tokens_total") or 0
+    running  = _parse_prom_float(text, "vllm:num_requests_running") or 0
+    waiting  = _parse_prom_float(text, "vllm:num_requests_waiting") or 0
+    kv_pct   = _parse_prom_float(text, "vllm:kv_cache_usage_perc") or 0
+    pfx_hits = _parse_prom_float(text, "vllm:prefix_cache_hits_total") or 0
+    pfx_qrys = _parse_prom_float(text, "vllm:prefix_cache_queries_total") or 0
 
-    latest = history[-1] if history else {}
-    gen_values = [h["gen_tps"] for h in history if h["gen_tps"] > 0]
+    now = time.time()
+
+    # 计算 throughput rates（计数器差值 / 时间差）
+    global _vllm_prom_last
+    gen_tps = 0
+    prom_tps = 0
+    if _vllm_prom_last:
+        dt = now - _vllm_prom_last.get("ts", now)
+        if dt > 0:
+            dg = gen_tok - _vllm_prom_last.get("gen_tok", gen_tok)
+            dp = prom_tok - _vllm_prom_last.get("prom_tok", prom_tok)
+            gen_tps = round(max(0, dg / dt), 1)
+            prom_tps = round(max(0, dp / dt), 1)
+    _vllm_prom_last = {"ts": now, "gen_tok": gen_tok, "prom_tok": prom_tok}
+
+    # 构造返回数据
+    pfx_hit = round(pfx_hits / pfx_qrys * 100, 1) if pfx_qrys > 0 else 0
+
+    latest = {
+        "gen_tps": gen_tps,
+        "prom_tps": prom_tps,
+        "running": int(running),
+        "waiting": int(waiting),
+        "kv_pct": round(kv_pct * 100, 1),  # Prometheus 是 0-1 分数
+        "pfx_hit": pfx_hit,
+    }
 
     _check_config()
     ts = time.time()
 
     # ── 落盘到 SQLite ─────────────────────────────────
-    if latest:
-        _save_vllm(ts, latest)
+    _save_vllm(ts, latest)
     _maybe_cleanup()
 
     # ── 记录到内存历史（带时间戳） ──────────────────────
@@ -212,10 +242,13 @@ async def vllm_status():
     if len(_history) > MAX_HISTORY:
         _history.pop(0)
 
+    # ── 从 SQLite 读取最近历史（供前端图表） ─────────────
+    raw_history = [snapshot]
+
     return {
         "latest": latest,
-        "avg_gen_tps": round(sum(gen_values) / len(gen_values), 1) if gen_values else 0,
-        "history": history,
+        "avg_gen_tps": round(sum(h.get("gen_tps", 0) for h in _history if h.get("gen_tps", 0) > 0) / max(len([h for h in _history if h.get("gen_tps", 0) > 0]), 1), 1),
+        "history": raw_history,
     }
 
 
@@ -469,6 +502,88 @@ async def chassis_sensors():
             if m and int(m.group(2)) > 0:
                 fans.append({"label": m.group(1), "rpm": int(m.group(2))})
     return {"temps": temps, "fans": fans}
+
+
+@app.get("/api/cpu")
+async def cpu_info():
+    """返回 CPU + 内存使用情况（top + free 命令解析）。"""
+    try:
+        # 并行获取 CPU 和内存
+        top_out = _run_cmd("top -bn1")
+        free_out = _run_cmd("free -b")
+        uptime_out = _run_cmd("uptime")
+    except Exception as e:
+        return {"error": str(e)}
+
+    # 解析 top: %Cpu(s):  3.0 us,  1.3 sy,  0.0 ni, 95.2 id,  0.0 wa,  0.5 hi,  0.0 si,  0.0 st
+    cpu_pct = 0.0
+    cpu_line = None
+    for line in top_out.split("\n"):
+        if line.startswith("%Cpu"):
+            cpu_line = line
+            break
+    if cpu_line:
+        # 用 idle 来计算总使用率
+        id_m = re.search(r'([\d.]+)\s+id', cpu_line)
+        if id_m:
+            cpu_pct = round(100.0 - float(id_m.group(1)), 1)
+
+    # 解析 free（支持中/英文 locale，中文 locale 标签和数字间无空格）
+    mem_total = mem_used = mem_avail = mem_free = 0
+    swap_total = swap_used = 0
+    for line in free_out.split("\n"):
+        # 移除行首标签（可能粘连在第一个数字上）
+        line2 = line.lstrip()
+        # 尝试分离标签和数字
+        for sep in (" ：", ":", "：", "  "):
+            if sep in line2:
+                line2 = line2.split(sep, 1)[-1]
+                break
+        parts = line2.strip().split()
+        if len(parts) < 2:
+            continue
+        try:
+            total_val = int(parts[0])
+        except ValueError:
+            continue
+        if len(parts) >= 6 and total_val > 1_000_000_000:  # 内存行
+            mem_total = total_val
+            mem_used = int(parts[1])
+            mem_free = int(parts[2])
+            mem_avail = int(parts[-1])  # available 是最后一列
+        elif len(parts) >= 2:  # Swap 行（通常只有 3 列: total used free）
+            swap_total = total_val
+            swap_used = int(parts[1])
+
+    mem_pct = round(mem_used / mem_total * 100, 1) if mem_total > 0 else 0
+    swap_pct = round(swap_used / swap_total * 100, 1) if swap_total > 0 else 0
+
+    # 解析 uptime load average
+    load1 = load5 = load15 = 0.0
+    if "load average:" in uptime_out:
+        m = re.search(r'load average:\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)', uptime_out)
+        if m:
+            load1, load5, load15 = float(m.group(1)), float(m.group(2)), float(m.group(3))
+
+    # CPU 核心数
+    try:
+        cores = int(_run_cmd("nproc").strip())
+    except:
+        cores = 1
+
+    return {
+        "cpu_pct": cpu_pct,
+        "cpu_line": cpu_line,
+        "cores": cores,
+        "load_avg": [load1, load5, load15],
+        "mem_total_mb": round(mem_total / (1024*1024), 1),
+        "mem_used_mb": round(mem_used / (1024*1024), 1),
+        "mem_avail_mb": round(mem_avail / (1024*1024), 1),
+        "mem_pct": mem_pct,
+        "swap_total_mb": round(swap_total / (1024*1024), 1),
+        "swap_used_mb": round(swap_used / (1024*1024), 1),
+        "swap_pct": swap_pct,
+    }
 
 
 # ── 启动/停止 ──────────────────────────────────────────────────

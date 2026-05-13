@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>X2 · vLLM 监控看板</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #060a14; --bg-alt: #0b0f1a; --card: #0f172a;
+    --card-elevated: #1a2332; --card-border: #1e293b; --border: #1e293b;
+    --border-light: #2d3a50; --text: #e2e8f0; --text-muted: #7b8799;
+    --text-dim: #475569; --ok: #10b981; --warn: #f59e0b;
+    --err: #ef4444; --blue: #60a5fa; --purple: #a78bfa;
+    --cyan: #2dd4bf; --pink: #f472b6;
+    --grad-accent: linear-gradient(135deg, #60a5fa, #2dd4bf);
+    --grad-card: linear-gradient(180deg, #1a2332 0%, #0f172a 100%);
+    --grad-header: linear-gradient(180deg, #0f172a 0%, #0b0f1a 100%);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+         background: var(--bg); color: var(--text); padding: 16px; max-width: 1400px; margin: 0 auto; }
+  header { display: flex; align-items: center; justify-content: space-between;
+           padding: 14px 16px; background: var(--grad-header);
+           border: 1px solid var(--card-border); border-radius: 8px;
+           margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+  header h1 { font-size: 1.3rem; background: var(--grad-accent); -webkit-background-clip: text;
+              -webkit-text-fill-color: transparent; background-clip: text; }
+  header .status { font-size: 0.75rem; color: var(--text-muted); }
+  #refresh-btn { background: var(--card-elevated); color: var(--text); border: 1px solid var(--card-border);
+                 border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 0.8rem;
+                 font-family: inherit; transition: all 0.2s; }
+  #refresh-btn:hover { background: #1e293b; border-color: var(--border-light); }
+  #refresh-btn:active { transform: scale(0.96); }
+  #refresh-btn.spinning svg { animation: spin 0.6s linear; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .gpu-grid { display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 20px; }
+  .gpu-card { background: var(--grad-card); border: 1px solid var(--card-border); border-radius: 8px; padding: 10px 14px; position: relative; }
+  .gpu-card:hover { border-color: var(--border-light); }
+  .gpu-card::before { content: ''; position: absolute; top: 0; left: 0; width: 3px; height: 100%; border-radius: 8px 0 0 8px; background: var(--ok); }
+  .gpu-card.warn::before { background: var(--warn); }
+  .gpu-card.err::before  { background: var(--err); }
+  .gpu-card .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+  .gpu-card .card-head h3 { flex-shrink: 0; font-size: 0.8rem; color: var(--blue); }
+  .sparkline-wrap { flex: 0 0 auto; width: 100px; height: 20px; }
+  .sparkline-wrap canvas { width: 100%; height: 20px; display: block; }
+  .collapse-btn { background: transparent; border: 1px solid var(--card-border); color: var(--text-dim);
+                   border-radius: 3px; cursor: pointer; font-size: 0.6rem; line-height: 1;
+                   padding: 2px 5px; transition: all 0.2s; flex-shrink: 0; }
+  .collapse-btn:hover { background: var(--card-elevated); color: var(--text); }
+  .gpu-card .card-body { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 14px;
+                          overflow: hidden; transition: max-height 0.3s, opacity 0.25s; }
+  .gpu-card.collapsed .card-body { max-height: 0 !important; opacity: 0; padding: 0; overflow: hidden; }
+  .gb-row { display: inline-flex; align-items: center; gap: 3px; font-size: 0.72rem; white-space: nowrap; }
+  .gb-row .lbl { color: var(--text-dim); }
+  .gb-row .val { font-weight: 600; }
+  .gb-bar { display: inline-block; width: 60px; height: 4px; background: #1a2332; border-radius: 2px; overflow: hidden; vertical-align: middle; }
+  .gb-bar .fill { height: 100%; border-radius: 2px; transition: width 0.4s; background: var(--ok); }
+  .gb-bar .fill.warn { background: var(--warn); }
+  .gb-bar .fill.err  { background: var(--err); }
+  .vllm-panel { background: var(--grad-card); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px; margin-bottom: 20px; }
+  .vllm-panel h2 { font-size: 0.9rem; color: var(--blue); margin-bottom: 10px; }
+  .vllm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
+  .vllm-stat { text-align: center; padding: 8px; background: var(--bg-alt); border-radius: 6px; border: 1px solid transparent; }
+  .vllm-stat:hover { border-color: var(--card-border); }
+  .vllm-stat .num { font-size: 1.5rem; font-weight: 700; color: var(--ok); transition: color 0.3s; }
+  .vllm-stat .num.warn { color: var(--warn); }
+  .vllm-stat .num.err  { color: var(--err); }
+  .vllm-stat .unit { font-size: 0.65rem; color: var(--text-dim); margin-top: 2px; }
+  .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+  @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+  .chart-box { background: var(--grad-card); border: 1px solid var(--card-border); border-radius: 8px; padding: 12px; }
+  .chart-box h3 { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px; }
+  .chart-box canvas { width: 100% !important; height: 180px !important; }
+  .header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .range-group { display: flex; background: var(--bg-alt); border: 1px solid var(--card-border); border-radius: 6px; overflow: hidden; }
+  .range-btn { background: transparent; color: var(--text-dim); border: none; padding: 6px 12px; cursor: pointer;
+               font-size: 0.75rem; font-family: inherit; transition: all 0.2s; }
+  .range-btn:hover { color: var(--text); background: #1e293b; }
+  .range-btn.active { color: var(--blue); background: rgba(96,165,250,0.12); }
+  #pause-btn { background: var(--card-elevated); color: var(--text); border: 1px solid var(--card-border);
+               border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 0.85rem;
+               font-family: inherit; transition: all 0.2s; }
+  #pause-btn:hover { background: #1e293b; }
+  #pause-btn.paused { background: var(--warn); border-color: var(--warn); color: #000; }
+  #status-bar { display: flex; gap: 20px; padding: 8px 14px; background: var(--grad-card);
+                border: 1px solid var(--card-border); border-radius: 8px; margin-bottom: 16px;
+                font-size: 0.75rem; flex-wrap: wrap; }
+  #status-bar .stat { display: flex; align-items: center; gap: 6px; }
+  #status-bar .stat .val { background: var(--grad-accent); -webkit-background-clip: text;
+                           -webkit-text-fill-color: transparent; background-clip: text; font-weight: 600; }
+  .chart-full { margin-bottom: 20px; }
+  .chart-full .chart-box canvas { height: 200px !important; }
+
+  /* ═══ Tabs ═══ */
+  .vllm-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+  .tab-btn { background: transparent; color: var(--text-dim); border: 1px solid transparent;
+             border-radius: 6px; padding: 5px 14px; cursor: pointer; font-size: 0.75rem;
+             font-family: inherit; transition: all 0.2s; }
+  .tab-btn:hover { color: var(--text); background: var(--bg-alt); border-color: var(--card-border); }
+  .tab-btn.active { color: var(--blue); background: rgba(96,165,250,0.12); border-color: var(--blue); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* ═══ Token 统计面板 ═══ */
+  .token-panel { background: var(--grad-card); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+  .token-panel h2 { font-size: 0.85rem; color: var(--purple); margin-bottom: 10px; }
+  .token-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+  .token-card { text-align: center; padding: 8px; background: var(--bg-alt); border-radius: 6px; }
+  .token-card .num { font-size: 1.3rem; font-weight: 700; color: var(--cyan); }
+  .token-card .label { font-size: 0.7rem; color: var(--text-dim); }
+  .token-card .sub { font-size: 0.6rem; color: var(--text-muted); margin-top: 1px; }
+
+  /* ═══ 机箱传感器面板 ═══ */
+  .chassis-panel { background: var(--grad-card); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+  .chassis-panel h2 { font-size: 0.85rem; color: var(--warn); margin-bottom: 10px; }
+  .chassis-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+  .chassis-card { padding: 8px 10px; background: var(--bg-alt); border-radius: 6px; display: flex; justify-content: space-between; align-items: center; }
+  .chassis-card .label { font-size: 0.7rem; color: var(--text-dim); }
+  .chassis-card .val { font-size: 0.85rem; font-weight: 600; }
+  .chassis-card .val.ok   { color: var(--ok); }
+  .chassis-card .val.warn { color: var(--warn); }
+  .chassis-card .val.err  { color: var(--err); }
+  #toast { position: fixed; bottom: 20px; right: 20px; background: var(--card-elevated); border: 1px solid var(--border-light);
+           border-radius: 8px; padding: 10px 16px; font-size: 0.75rem; opacity: 0;
+           transform: translateY(10px); transition: opacity 0.35s, transform 0.35s;
+           pointer-events: none; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+  #toast.show { opacity: 1; transform: translateY(0); }
+  #toast.hide { opacity: 0; transform: translateY(10px); transition: opacity 0.4s, transform 0.4s; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>📊 X2 · vLLM 监控看板</h1>
+    <div class="status" id="status">⏳ 加载中...</div>
+  </div>
+  <div class="header-actions">
+    <div class="range-group" id="range-group">
+      <button class="range-btn active" data-range="">实时</button>
+      <button class="range-btn" data-range="1h">1h</button>
+      <button class="range-btn" data-range="6h">6h</button>
+      <button class="range-btn" data-range="24h">24h</button>
+    </div>
+    <button id="pause-btn" onclick="togglePause()" title="暂停自动刷新">⏸</button>
+    <button id="refresh-btn" onclick="manualRefresh()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+           style="vertical-align: middle; margin-right: 4px;">
+        <path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+        <path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+      </svg>
+      刷新
+    </button>
+  </div>
+</header>
+
+<div id="status-bar">
+  <div class="stat">⏱ <span class="val" id="range-label">实时</span></div>
+  <div class="stat">📊 <span class="val" id="pt-count">--</span> 采样点</div>
+  <div class="stat">🔄 <span class="val" id="poll-interval">5s</span></div>
+</div>
+
+<div class="gpu-grid" id="gpu-grid"></div>
+
+<div class="token-panel" id="token-panel">
+  <h2>📊 Token 消费统计</h2>
+  <div class="token-grid">
+    <div class="token-card"><div class="num" id="tok-today-gen">--</div><div class="label">今日输出</div><div class="sub">generation</div></div>
+    <div class="token-card"><div class="num" id="tok-today-prom">--</div><div class="label">今日输入</div><div class="sub">prompt</div></div>
+    <div class="token-card"><div class="num" id="tok-week-gen">--</div><div class="label">本周输出</div><div class="sub">generation</div></div>
+    <div class="token-card"><div class="num" id="tok-week-prom">--</div><div class="label">本周输入</div><div class="sub">prompt</div></div>
+    <div class="token-card"><div class="num" id="tok-month-gen">--</div><div class="label">本月输出</div><div class="sub">generation</div></div>
+    <div class="token-card"><div class="num" id="tok-month-prom">--</div><div class="label">本月输入</div><div class="sub">prompt</div></div>
+    <div class="token-card"><div class="num" id="tok-total-gen">--</div><div class="label">累计输出</div><div class="sub">generation</div></div>
+    <div class="token-card"><div class="num" id="tok-total-prom">--</div><div class="label">累计输入</div><div class="sub">prompt</div></div>
+  </div>
+</div>
+
+<div class="chassis-panel" id="chassis-panel">
+  <h2>🖥️ 机箱传感器</h2>
+  <div class="chassis-grid" id="chassis-grid"></div>
+</div>
+
+<div class="vllm-panel">
+  <h2>vLLM · <span id="model-name">加载中...</span></h2>
+  <div class="vllm-tabs">
+    <button class="tab-btn active" data-tab="throughput">📈 吞吐量</button>
+    <button class="tab-btn" data-tab="queue">⏳ 运行队列</button>
+    <button class="tab-btn" data-tab="cache">💾 缓存</button>
+  </div>
+  <div class="vllm-grid" id="vllm-stats"></div>
+</div>
+
+<div class="tab-content active" id="tab-throughput">
+  <div class="charts-grid">
+    <div class="chart-box"><h3>Generation Throughput (tokens/s)</h3><canvas id="chart-gen"></canvas></div>
+    <div class="chart-box"><h3>Prompt Throughput (tokens/s)</h3><canvas id="chart-prom"></canvas></div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-queue">
+  <div class="charts-grid">
+    <div class="chart-box"><h3>Requests (Running / Waiting)</h3><canvas id="chart-reqs"></canvas></div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-cache">
+  <div class="charts-grid">
+    <div class="chart-box"><h3>GPU KV Cache %</h3><canvas id="chart-kv"></canvas></div>
+  </div>
+</div>
+
+<div class="chart-full chart-box">
+  <h3>GPU Metrics — Memory / Temp / Util / Power</h3>
+  <canvas id="chart-gpu"></canvas>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const REFRESH_MS = {{ refresh_sec }} * 1000;
+const statusEl = document.getElementById('status');
+const gridEl   = document.getElementById('gpu-grid');
+const btn      = document.getElementById('refresh-btn');
+
+/* ═══ 状态 ═══ */
+const HISTORY_LEN = 120;
+let tsV = [], dGen=[], dProm=[], dKV=[], dPfx=[], dRun=[], dWait=[];
+let tsG = [], dMem=[], dTemp=[], dUtil=[], dPower=[];
+let gpuHist = {};  // {index: {util:[], mem:[], temp:[]}} — 30-point per-card buffer for sparkline
+let currentRange = '';  // '' = 实时, '1h','6h','24h'
+let paused = false;
+let pollTimer = null;
+
+function trim(arr) { while(arr.length > HISTORY_LEN) arr.shift(); }
+function trimAll() { [tsV,tsG,dGen,dProm,dKV,dPfx,dRun,dWait,dMem,dTemp,dUtil,dPower].forEach(trim); }
+
+/* ═══ Toast 提示 ═══ */
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = '💬 ' + msg;
+  el.classList.remove('hide');
+  el.classList.add('show');
+  clearTimeout(el._hide);
+  el._hide = setTimeout(() => {
+    el.classList.remove('show');
+    el.classList.add('hide');
+  }, 3000);
+}
+
+/* ═══ 时间范围切换 ═══ */
+document.getElementById('range-group').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.range-btn');
+  if (!btn || btn.classList.contains('active')) return;
+  document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentRange = btn.dataset.range;
+  document.getElementById('range-label').textContent = btn.textContent.trim();
+  if (!currentRange) gpuHist = {};  // 切回实时时清空 sparkline 缓存
+  if (!paused) await fetchHistory();
+});
+
+async function fetchHistory() {
+  try {
+    let url = '/api/history';
+    if (currentRange) url += '?range=' + currentRange;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('history ' + r.status);
+    const json = await r.json();
+    const pts = json.data || [];
+
+    // 重建 vLLM 缓冲区
+    tsV = pts.map(p => _fmtTime(p.ts));
+    dGen = pts.map(p => p.gen_tps||0);
+    dProm = pts.map(p => p.prom_tps||0);
+    dKV = pts.map(p => p.kv_pct||0);
+    dPfx = pts.map(p => p.pfx_hit||0);
+    dRun = pts.map(p => p.running||0);
+    dWait = pts.map(p => p.waiting||0);
+    updateCh('gen'); updateCh('prom'); updateCh('kv'); updateCh('reqs');
+
+    // GPU 历史
+    if (currentRange) {
+      const gr = await fetch('/api/gpu/history?range=' + currentRange);
+      if (gr.ok) {
+        const gj = await gr.json();
+        const gpts = gj.data || [];
+        tsG = gpts.filter(p => p.gpu_index === 0).map(p => _fmtTime(p.ts));
+        dMem = []; dTemp = []; dUtil = []; dPower = [];
+        for (const p of gpts.filter(p => p.gpu_index === 0)) {
+          dMem.push(p.mem_used_mb||0);
+          dTemp.push(p.temp_c||0);
+          dUtil.push(p.util_pct||0);
+          dPower.push(p.power_w||0);
+        }
+        updateCh('gpu');
+
+        // 按 index 分组 sparkline 数据（取后 30 点）
+        gpuHist = {};
+        const byIdx = {};
+        for (const p of gpts) {
+          if (!byIdx[p.gpu_index]) byIdx[p.gpu_index] = [];
+          byIdx[p.gpu_index].push(p.util_pct||0);
+        }
+        for (const [idx, vals] of Object.entries(byIdx)) {
+          gpuHist[idx] = {util: vals.slice(-30), mem:[], temp:[]};
+        }
+      }
+    }
+
+    document.getElementById('pt-count').textContent = pts.length;
+    toast('已加载 ' + pts.length + ' 个采样点 (' + (currentRange||'实时') + ')');
+  } catch(e) {
+    toast('历史数据加载失败: ' + e.message);
+  }
+}
+
+/* ═══ 暂停 / 恢复 ═══ */
+function togglePause() {
+  paused = !paused;
+  const btn = document.getElementById('pause-btn');
+  if (paused) {
+    btn.textContent = '▶';
+    btn.title = '恢复自动刷新';
+    btn.classList.add('paused');
+    clearInterval(pollTimer);
+    toast('自动刷新已暂停');
+  } else {
+    btn.textContent = '⏸';
+    btn.title = '暂停自动刷新';
+    btn.classList.remove('paused');
+    pollTimer = setInterval(fetchAll, REFRESH_MS);
+    fetchAll();
+    toast('自动刷新已恢复');
+  }
+}
+
+/* ═══ Tab 切换 ═══ */
+document.addEventListener('click', (e) => {
+  const tabBtn = e.target.closest('.tab-btn');
+  if (!tabBtn) return;
+  const tab = tabBtn.dataset.tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  tabBtn.classList.add('active');
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+  // 隐藏/显示导致 canvas 尺寸重置，强制 resize
+  setTimeout(() => {
+    const tabCharts = {throughput:['gen','prom'], queue:['reqs'], cache:['kv']};
+    for (const name of (tabCharts[tab]||[])) {
+      if (C[name]) C[name].resize();
+    }
+  }, 50);
+});
+
+/* ═══ Chart.js 初始化 ═══ */
+Chart.defaults.color = '#475569';
+Chart.defaults.borderColor = '#1e293b';
+Chart.defaults.font.family = "'JetBrains Mono', monospace";
+Chart.defaults.font.size = 10;
+Chart.defaults.plugins.legend.labels.boxWidth = 10;
+Chart.defaults.plugins.legend.labels.padding = 8;
+Chart.defaults.plugins.tooltip.backgroundColor = '#1a2332';
+Chart.defaults.plugins.tooltip.borderColor = '#2d3a50';
+Chart.defaults.plugins.tooltip.borderWidth = 1;
+Chart.defaults.plugins.tooltip.cornerRadius = 6;
+
+function mkLine(id, datasets) {
+  return new Chart(document.getElementById(id), {
+    type:'line', data:{labels:[], datasets},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      animation:{duration:300},
+      interaction:{intersect:false, mode:'index'},
+      scales:{
+        x:{display:true, grid:{color:'#1e293b'}, ticks:{maxTicksLimit:12,maxRotation:0}},
+        y:{grid:{color:'#1e293b'}, beginAtZero:true},
+      },
+      plugins:{legend:{display:true,position:'top'}, tooltip:{enabled:true}},
+    }
+  });
+}
+
+const C = {
+  gen:  mkLine('chart-gen', [{label:'gen t/s',borderColor:'#2dd4bf',bgColor:'rgba(45,212,191,0.1)',fill:true,tension:0.3,pointRadius:0,borderWidth:2}]),
+  prom: mkLine('chart-prom',[{label:'prom t/s',borderColor:'#60a5fa',bgColor:'rgba(96,165,250,0.1)',fill:true,tension:0.3,pointRadius:0,borderWidth:2}]),
+  kv:   mkLine('chart-kv',  [{label:'KV %',borderColor:'#eab308',bgColor:'rgba(234,179,8,0.1)',fill:true,tension:0.3,pointRadius:0,borderWidth:2}]),
+  reqs: mkLine('chart-reqs',[
+    {label:'Running',borderColor:'#22c55e',tension:0.3,pointRadius:0,borderWidth:2},
+    {label:'Waiting',borderColor:'#ef4444',tension:0.3,pointRadius:0,borderWidth:2},
+  ]),
+  gpu:  mkLine('chart-gpu',[
+    {label:'Mem MB',borderColor:'#60a5fa',bgColor:'rgba(96,165,250,0.05)',fill:true,tension:0.3,pointRadius:0,borderWidth:1.5,yAxisID:'y'},
+    {label:'Temp °C',borderColor:'#ef4444',tension:0.3,pointRadius:0,borderWidth:1.5,yAxisID:'y1'},
+    {label:'Util %',borderColor:'#22c55e',tension:0.3,pointRadius:0,borderWidth:1.5,yAxisID:'y1'},
+    {label:'Power W',borderColor:'#eab308',tension:0.3,pointRadius:0,borderWidth:1.5,yAxisID:'y2'},
+  ]),
+};
+
+C.gpu.options.scales.y  = {position:'left',  grid:{color:'#1e293b'},beginAtZero:false,title:{display:true,text:'Mem MB'}};
+C.gpu.options.scales.y1 = {position:'right', grid:{display:false},      title:{display:true,text:'°C / %'}};
+C.gpu.options.scales.y2 = {position:'right', grid:{display:false},offset:true,        title:{display:true,text:'W'}};
+
+/* ═══ 渲染 GPU 卡片 ═══ */
+function renderGpu(cards) {
+  gridEl.innerHTML = '';
+  const nowLabel = _now();
+  for (const c of cards) {
+    const mp = c.mem_total_mb?(c.mem_used_mb/c.mem_total_mb*100):0;
+    const pp = c.power_limit_w?(c.power_w/c.power_limit_w*100):0;
+    const cl = mp>92?'err':mp>75?'warn':'';
+    const idx = c.index;
+
+    // 按 GPU index 缓存 sparkline 数据
+    if (!gpuHist[idx]) gpuHist[idx] = {util:[], mem:[], temp:[]};
+    gpuHist[idx].util.push(c.util_pct);
+    gpuHist[idx].mem.push(c.mem_used_mb);
+    gpuHist[idx].temp.push(c.temp_c);
+    if (gpuHist[idx].util.length > 30) gpuHist[idx].util.shift();
+    if (gpuHist[idx].mem.length > 30) gpuHist[idx].mem.shift();
+    if (gpuHist[idx].temp.length > 30) gpuHist[idx].temp.shift();
+
+    const collapsed = localStorage.getItem('gpu-collapsed-'+idx) === '1';
+
+    gridEl.innerHTML += `<div class="gpu-card ${cl}${collapsed?' collapsed':''}" data-idx="${idx}">
+      <div class="card-head">
+        <h3>GPU ${idx} · ${c.name}</h3>
+        <span class="sparkline-wrap"><canvas class="sparkline" data-idx="${idx}"></canvas></span>
+        <button class="collapse-btn" data-idx="${idx}" onclick="toggleGpuCard(${idx})">${collapsed?'+':'−'}</button>
+      </div>
+      <div class="card-body">
+        <span class="gb-row"><span class="lbl">显存</span><span class="val">${_mb(c.mem_used_mb)} / ${_mb(c.mem_total_mb)}</span><span class="gb-bar"><span class="fill ${cl}" style="width:${mp}%"></span></span></span>
+        <span class="gb-row"><span class="lbl">温度</span><span class="val">${c.temp_c}°C</span></span>
+        <span class="gb-row"><span class="lbl">利用率</span><span class="val">${c.util_pct}%</span></span>
+        <span class="gb-row"><span class="lbl">功耗</span><span class="val">${c.power_w.toFixed(1)}W / ${c.power_limit_w.toFixed(0)}W</span><span class="gb-bar"><span class="fill ${pp>90?'err':pp>70?'warn':''}" style="width:${pp}%"></span></span></span>
+      </div>
+    </div>`;
+    // GPU 实时追加到缓冲区（保持原有主图兼容）
+    tsG.push(nowLabel);
+    dMem.push(c.mem_used_mb); dTemp.push(c.temp_c); dUtil.push(c.util_pct); dPower.push(c.power_w);
+    if (tsG.length > HISTORY_LEN) { tsG.shift(); dMem.shift(); dTemp.shift(); dUtil.shift(); dPower.shift(); }
+  }
+  updateCh('gpu');
+  // 等 DOM 更新后画 sparklines
+  requestAnimationFrame(_drawSparklines);
+}
+
+/* ═══ GPU 卡片折叠/展开 ═══ */
+function toggleGpuCard(idx) {
+  const card = document.querySelector(`.gpu-card[data-idx="${idx}"]`);
+  if (!card) return;
+  const was = card.classList.contains('collapsed');
+  card.classList.toggle('collapsed');
+  localStorage.setItem('gpu-collapsed-'+idx, was?'0':'1');
+  // 更新按钮文字
+  const btn = card.querySelector('.collapse-btn');
+  if (btn) btn.textContent = was ? '−' : '+';
+}
+
+/* ═══ 画 sparkline（纯 canvas 2D，轻量无 Chart.js） ═══ */
+function _drawSparklines() {
+  document.querySelectorAll('.sparkline').forEach(canvas => {
+    const idx = parseInt(canvas.dataset.idx);
+    const data = gpuHist[idx];
+    if (!data || data.util.length < 2) return;
+    const vals = data.util;
+    const w = canvas.parentElement.offsetWidth || 80;
+    const h = 22;
+    canvas.width = w * (window.devicePixelRatio||1);
+    canvas.height = h * (window.devicePixelRatio||1);
+    canvas.style.width = w+'px'; canvas.style.height = h+'px';
+    const ctx = canvas.getContext('2d');
+    ctx.scale(window.devicePixelRatio||1, window.devicePixelRatio||1);
+
+    const pad = 1;
+    const drawW = w - pad*2, drawH = h - pad*2;
+    let mn = Infinity, mx = -Infinity;
+    for (const v of vals) { if (v < mn) mn = v; if (v > mx) mx = v; }
+    const range = mx - mn || 1;
+
+    // 背景线
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 1;
+    for (let y = 0; y < 3; y++) {
+      const ly = pad + drawH * y / 2;
+      ctx.beginPath(); ctx.moveTo(pad, ly); ctx.lineTo(w-pad, ly); ctx.stroke();
+    }
+
+    // 渐变填充
+    const grad = ctx.createLinearGradient(0, pad, 0, pad+drawH);
+    grad.addColorStop(0, 'rgba(34,197,94,0.25)');
+    grad.addColorStop(1, 'rgba(34,197,94,0.02)');
+
+    // 数据线
+    const stepX = drawW / (vals.length - 1);
+    ctx.beginPath();
+    for (let i = 0; i < vals.length; i++) {
+      const x = pad + i * stepX;
+      const y = pad + drawH - (vals[i] - mn) / range * drawH;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = '#22c55e';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    // 填充
+    ctx.lineTo(pad + (vals.length-1)*stepX, pad+drawH);
+    ctx.lineTo(pad, pad+drawH);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+  });
+}
+
+/* ═══ 渲染 vLLM 统计 ═══ */
+function renderVllm(data) {
+  const L = data.latest||{}, avg = data.avg_gen_tps||0;
+  const items = [
+    {label:'Generation',val:L.gen_tps??'--',unit:'tok/s',cls:(L.gen_tps||0)>30?'':(L.gen_tps||0)>0?'warn':'err'},
+    {label:'Prompt',val:L.prom_tps??'--',unit:'tok/s',cls:''},
+    {label:'Avg Gen',val:avg?avg.toFixed(1):'--',unit:'tok/s',cls:avg>30?'':avg>10?'warn':'err'},
+    {label:'Running',val:L.running??'--',unit:'reqs',cls:''},
+    {label:'Waiting',val:L.waiting??'--',unit:'reqs',cls:(L.waiting||0)>5?'warn':''},
+    {label:'KV Cache',val:(L.kv_pct??0).toFixed(1),unit:'%',cls:(L.kv_pct||0)>80?'err':(L.kv_pct||0)>50?'warn':''},
+    {label:'Prefix Hit',val:(L.pfx_hit??0).toFixed(1),unit:'%',cls:(L.pfx_hit||0)>80?'':(L.pfx_hit||0)>50?'warn':'err'},
+  ];
+  document.getElementById('vllm-stats').innerHTML = items.map(i=>`
+    <div class="vllm-stat"><div class="num ${i.cls}">${i.val}</div><div class="unit">${i.label} · ${i.unit}</div></div>`).join('');
+
+  // vLLM 实时追加到缓冲区
+  const label = _now();
+  tsV.push(label);
+  dGen.push(L.gen_tps||0); dProm.push(L.prom_tps||0); dKV.push(L.kv_pct||0);
+  dPfx.push(L.pfx_hit||0); dRun.push(L.running||0); dWait.push(L.waiting||0);
+  if (tsV.length > HISTORY_LEN) {
+    const n = tsV.length - HISTORY_LEN;
+    tsV.splice(0,n); dGen.splice(0,n); dProm.splice(0,n); dKV.splice(0,n);
+    dPfx.splice(0,n); dRun.splice(0,n); dWait.splice(0,n);
+  }
+  updateCh('gen'); updateCh('prom'); updateCh('kv'); updateCh('reqs');
+}
+
+/* ═══ 更新图表 ═══ */
+function updateCh(name) {
+  const ch = C[name];
+  ch.data.labels = name==='gpu'?tsG:tsV;
+  if(name==='gen')  ch.data.datasets[0].data = dGen;
+  if(name==='prom') ch.data.datasets[0].data = dProm;
+  if(name==='kv')   ch.data.datasets[0].data = dKV;
+  if(name==='reqs'){ ch.data.datasets[0].data = dRun; ch.data.datasets[1].data = dWait; }
+  if(name==='gpu'){
+    ch.data.datasets[0].data = dMem; ch.data.datasets[1].data = dTemp;
+    ch.data.datasets[2].data = dUtil; ch.data.datasets[3].data = dPower;
+  }
+  ch.update('none');
+}
+
+/* ═══ Token 统计渲染 ═══ */
+function _fmtNum(n) {
+  if (n >= 1e9) return (n/1e9).toFixed(2).replace(/\.0+$/,'') + 'B';
+  if (n >= 1e6) return (n/1e6).toFixed(2).replace(/\.0+$/,'') + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1).replace(/\.0$/,'') + 'K';
+  return n.toLocaleString();
+}
+function renderTokens(data) {
+  if(!data || !data.today) return;
+  const set = (id, v) => { const el = document.getElementById(id); if(el) el.textContent = _fmtNum(v); };
+  set('tok-today-gen', data.today.gen); set('tok-today-prom', data.today.prom);
+  set('tok-week-gen', data.this_week.gen); set('tok-week-prom', data.this_week.prom);
+  set('tok-month-gen', data.this_month.gen); set('tok-month-prom', data.this_month.prom);
+  set('tok-total-gen', data.total.gen); set('tok-total-prom', data.total.prom);
+}
+
+/* ═══ 机箱传感器渲染 ═══ */
+function renderChassis(data) {
+  const grid = document.getElementById('chassis-grid');
+  if (!grid) return;
+  if (data.error || (!data.temps?.length && !data.fans?.length)) {
+    grid.innerHTML = '<div class="chassis-card"><span class="label">传感器</span><span class="val" style="color:var(--text-dim)">无数据</span></div>';
+    return;
+  }
+  let html = '';
+  for (const t of (data.temps||[])) {
+    const label = t.sensor || t.chip;
+    let cl = '';
+    if (t.temp_c >= 85) cl = 'err';
+    else if (t.temp_c >= 70) cl = 'warn';
+    else cl = 'ok';
+    html += `<div class="chassis-card"><span class="label">${label}</span><span class="val ${cl}">${t.temp_c}°C</span></div>`;
+  }
+  for (const f of (data.fans||[])) {
+    const cl = f.rpm < 200 ? 'err' : f.rpm < 500 ? 'warn' : 'ok';
+    html += `<div class="chassis-card"><span class="label">${f.label||'风扇'}</span><span class="val ${cl}">${f.rpm} RPM</span></div>`;
+  }
+  grid.innerHTML = html;
+}
+
+/* ═══ 轮询 ═══ */
+async function fetchAll() {
+  try {
+    const [gr,vr,tr,cr] = await Promise.all([
+      fetch('/api/gpu'), fetch('/api/vllm'),
+      fetch('/api/tokens'), fetch('/api/chassis')
+    ]);
+    let degraded = false;
+    if(!gr.ok) { degraded = true; throw new Error('GPU API '+gr.status); }
+    renderGpu((await gr.json()).cards);
+    if(!vr.ok) { degraded = true; }
+    else { renderVllm(await vr.json()); }
+    if(tr.ok) renderTokens(await tr.json());
+    if(cr.ok) renderChassis(await cr.json());
+    statusEl.innerHTML = (degraded ? '🟡' : '🟢') + ' 正常 · '+_now();
+  } catch(e) {
+    statusEl.innerHTML = '🔴 错误: '+e.message;
+  }
+}
+
+/* ═══ 获取模型名称 ═══ */
+async function fetchModelName() {
+  const el = document.getElementById('model-name');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/models');
+    const data = await r.json();
+    el.textContent = data.default || data.models?.[0] || '未知';
+  } catch {
+    el.textContent = '未知';
+  }
+}
+
+async function manualRefresh() {
+  btn.classList.add('spinning');
+  if (currentRange) {
+    await fetchHistory();
+  }
+  await fetchAll();
+  setTimeout(()=>btn.classList.remove('spinning'),600);
+}
+
+/* ═══ 工具 ═══ */
+function _mb(mb){ return mb>=1024?(mb/1024).toFixed(1)+' GB':mb.toFixed(0)+' MB'; }
+function _now(){ return new Date().toLocaleTimeString('zh-CN',{hour12:false}); }
+function _fmtTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString('zh-CN',{hour12:false});
+}
+
+/* ═══ 启动 ═══ */
+fetchModelName();
+fetchAll();
+fetchHistory();
+pollTimer = setInterval(fetchAll, REFRESH_MS);
+</script>
+</body>
+</html>

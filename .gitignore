@@ -1,0 +1,6 @@
+# vLLM Dashboard .gitignore
+__pycache__/
+*.pyc
+*.pyo
+dashboard.log
+.uvicorn.pid
